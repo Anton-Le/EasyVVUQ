@@ -1,9 +1,9 @@
 import easyvvuq as uq
 import chaospy as cp
 import os
+import sys
 import pytest
 from easyvvuq.constants import default_campaign_prefix, Status
-from pprint import pprint
 import subprocess
 
 __copyright__ = """
@@ -42,7 +42,7 @@ CANNONSIM_PATH = os.path.realpath(os.path.expanduser("tests/cannonsim/bin/cannon
 def test_worker(tmpdir):
 
     # Set up a fresh campaign called "cannon"
-    my_campaign = uq.Campaign(name='cannon', work_dir=tmpdir, db_location='sqlite:///')
+    my_campaign = uq.Campaign(name='cannon', work_dir=tmpdir)
 
     # Define parameter space for the cannonsim app
     params = {
@@ -89,15 +89,13 @@ def test_worker(tmpdir):
         target_filename='in.cannon')
     decoder = uq.decoders.SimpleCSV(
         target_filename='output.csv', output_columns=[
-            'Dist', 'lastvx', 'lastvy'], header=0)
-    collater = uq.collate.AggregateSamples(average=False)
+            'Dist', 'lastvx', 'lastvy'])
 
     # Add the cannonsim app
     my_campaign.add_app(name="cannonsim",
                         params=params,
                         encoder=encoder,
-                        decoder=decoder,
-                        collater=collater)
+                        decoder=decoder)
 
     # Set the active app to be cannonsim (this is redundant when only one app
     # has been added)
@@ -108,22 +106,15 @@ def test_worker(tmpdir):
         "angle": cp.Uniform(0.0, 1.0),
         "height": cp.DiscreteUniform(0, 100),
         "velocity": cp.Normal(10.0, 1.0),
-        "mass": cp.Uniform(5.0, 1.0)
+        "mass": cp.Uniform(1.0, 5.0)
     }
     sampler1 = uq.sampling.RandomSampler(vary=vary)
-
-    print("Serialized sampler:", sampler1.serialize())
 
     # Set the campaign to use this sampler
     my_campaign.set_sampler(sampler1)
 
     # Draw 5 samples
     my_campaign.draw_samples(num_samples=5)
-
-    # Print the list of runs now in the campaign db
-    print("List of runs added:")
-    pprint(my_campaign.list_runs())
-    print("---")
 
     # User defined function
     def encode_and_execute_cannonsim(run_id, run_data):
@@ -136,8 +127,16 @@ def test_worker(tmpdir):
             run_id
         ]
         encoder_path = os.path.realpath(os.path.expanduser("easyvvuq/tools/external_encoder.py"))
-        subprocess.run(['python3', encoder_path] + enc_args)
-        subprocess.run([CANNONSIM_PATH, "in.cannon", "output.csv"], cwd=run_data['run_dir'])
+        try:
+            subprocess.run(['python3', encoder_path] + enc_args, check=True)
+        except subprocess.CalledProcessError as e:
+            sys.exit(f"Failed during encoding of run: f{e}")
+
+        try:
+            subprocess.run([CANNONSIM_PATH, "in.cannon", "output.csv"],
+                           cwd=run_data['run_dir'], check=True)
+        except subprocess.CalledProcessError as e:
+            sys.exit(f"Failed during execution of run: f{e}")
 
         my_campaign.campaign_db.set_run_statuses([run_id], Status.ENCODED)  # see note further down
 
@@ -154,26 +153,16 @@ def test_worker(tmpdir):
     # you that 'nothing has been collated' or something to that effect.
     ####
 
-    print("Runs list after encoding and execution:")
-    pprint(my_campaign.list_runs())
-
     # Collate all data into one pandas data frame
     my_campaign.collate()
-    print("data:", my_campaign.get_collation_result())
 
     # Create a BasicStats analysis element and apply it to the campaign
     stats = uq.analysis.BasicStats(qoi_cols=['Dist', 'lastvx', 'lastvy'])
     my_campaign.apply_analysis(stats)
-    print("stats:\n", my_campaign.get_last_analysis())
 
     bootstrap = uq.analysis.EnsembleBoot(groupby=['Dist'], qoi_cols=['lastv'])
     with pytest.raises(RuntimeError, match=r".* lastv"):
         my_campaign.apply_analysis(bootstrap)
-
-    # Print the campaign log
-    pprint(my_campaign._log)
-
-    print("All completed?", my_campaign.all_complete())
 
 
 if __name__ == "__main__":

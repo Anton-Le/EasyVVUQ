@@ -3,8 +3,6 @@ import chaospy as cp
 import os
 import sys
 import pytest
-from pprint import pprint
-import subprocess
 
 __copyright__ = """
 
@@ -106,15 +104,13 @@ def test_multiencoder(tmpdir):
     # Create decoder and collater for the cannonsim app
     decoder = uq.decoders.SimpleCSV(
         target_filename='output.csv', output_columns=[
-            'Dist', 'lastvx', 'lastvy'], header=0)
-    collater = uq.collate.AggregateSamples(average=False)
+            'Dist', 'lastvx', 'lastvy'])
 
     # Add the cannonsim app
     my_campaign.add_app(name="cannonsim",
                         params=params,
                         encoder=multiencoder,
-                        decoder=decoder,
-                        collater=collater)
+                        decoder=decoder)
 
     # Set the active app to be cannonsim (this is redundant when only one app
     # has been added)
@@ -138,32 +134,17 @@ def test_multiencoder(tmpdir):
     # Draw all samples
     my_campaign.draw_samples()
 
-    # Print the list of runs now in the campaign db
-    print("List of runs added:")
-    pprint(my_campaign.list_runs())
-    print("---")
-
     # Encode and execute.
     my_campaign.populate_runs_dir()
     my_campaign.apply_for_each_run_dir(
         uq.actions.ExecuteLocal("tests/cannonsim/bin/cannonsim dir5/dir6/in.cannon.2 output.csv"))
 
-    print("Runs list after encoding and execution:")
-    pprint(my_campaign.list_runs())
-
     # Collate all data into one pandas data frame
     my_campaign.collate()
-    print("data:", my_campaign.get_collation_result())
 
     # Create a BasicStats analysis element and apply it to the campaign
     stats = uq.analysis.BasicStats(qoi_cols=['Dist', 'lastvx', 'lastvy'])
     my_campaign.apply_analysis(stats)
-    print("stats:\n", my_campaign.get_last_analysis())
-
-    # Print the campaign log
-    pprint(my_campaign._log)
-
-    print("All completed?", my_campaign.all_complete())
 
 
 if __name__ == "__main__":

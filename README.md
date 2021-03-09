@@ -1,4 +1,4 @@
-<img align="left" width="75" height="75" src="https://easyvvuq.readthedocs.io/en/latest/_static/circle-logo.svg" alt="EasyVVUQ icon">
+<img align="left" width="75" height="75" src="https://github.com/UCL-CCS/EasyVVUQ/blob/dev/docs/images/circle-logo.svg" alt="EasyVVUQ icon">
 
 # EasyVVUQ
 
@@ -7,13 +7,43 @@
 [![Documentation Status](https://readthedocs.org/projects/easyvvuq/badge/?version=latest)](https://easyvvuq.readthedocs.io/)
 [![Coverage Status](https://coveralls.io/repos/github/UCL-CCS/EasyVVUQ/badge.svg?branch=dev&service=github)](https://coveralls.io/github/UCL-CCS/EasyVVUQ?branch=dev)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/3796/badge)](https://bestpractices.coreinfrastructure.org/projects/3796)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/UCL-CCS/EasyVVUQ/dev?filepath=tutorials)
 
-The aim of this library is to facilitate verification, validation and 
+The aim of EasyVVUQ is to facilitate verification, validation and 
 uncertainty quantification (VVUQ) for a wide variety of
-simulations.
+simulations. While very convenient for simple cases, EasyVVUQ is particularly well suited in situations where the simulations are computationally expensive, 
+heterogeneous computing resources are necessary, the sampling space is very large or book-keeping is prohibitively
+complex. It coordinates execution using an efficient database, it is fault tolerant and all progress can be saved.
 
-The easiest way to get started is to follow the example outlined in
-this [Google Colaboratory](https://colab.research.google.com/drive/1qD07_Ry2lOB9-Is6Z2mQG0vVWskNBHjr).
+Here are some examples of questions EasyVVUQ can answer about your code:
+
+ * Given the uncertainties in input parameters, what is the distribution of the output?
+ * What percentage of the output variance each input parameter contributes?
+
+It also lets you construct surrogate models that are cheaper to evaluate than the complete simulation.
+
+Basic concepts are introduced [here](https://mybinder.org/v2/gh/UCL-CCS/EasyVVUQ/a6852d6c5ba36f15579e601d7a8d074505f31084?filepath=tutorials%2Fbasic_tutorial.ipynb) and [here](https://mybinder.org/v2/gh/UCL-CCS/EasyVVUQ/74d6a9f4b0eecc754918de2f3795395d35ac4875?filepath=tutorials%2Fvector_qoi_tutorial.ipynb).
+
+Available analysis and sampling methods:
+
+* Polynomial Chaos Expansion
+* Stochastic Collocation
+* Monte Carlo Sensitivity Analysis
+* Markov-Chain Monte Carlo
+
+EasyVVUQ also supports building surrogate models using:
+
+* Polynomial Chaos Expansion
+* Stochastic Collocation
+* Gaussian Processes
+
+Supported computing resources:
+
+* Traditional clusters
+* [Kubernetes clusters](https://mybinder.org/v2/gh/UCL-CCS/EasyVVUQ/a9195fa1423d731ed996c9a5e34bb1256c6a0d5b?filepath=tutorials%2Fkubernetes_tutorial.ipynb)
+
+The easiest way to get started is to follow the tutorials in our
+[Binder](https://mybinder.org/v2/gh/UCL-CCS/EasyVVUQ/dev?filepath=tutorials).
 
 Development was funded by the EU Horizon 2020 project [VECMA](http://www.vecma.eu/).
 
@@ -69,7 +99,10 @@ Documentation, including a basic tutorial, is avalable [here](https://easyvvuq.r
 
 ## Citing EasyVVUQ
 
-Richardson, R A, Wright, D W, Edeling, W, Jancauskas, V, Lakhlili, J and Coveney, P V. 
+> Richardson, R A, Wright, D W, Edeling, W, Jancauskas, V, Lakhlili, J and Coveney, P V. 
 2020 EasyVVUQ: A Library for Verification, Validation and Uncertainty Quantification in High Performance Computing. 
 Journal of Open Research Software, 8: 11.
-[DOI: 10.5334/jors.303](https://doi.org/10.5334/jors.303).
+> [DOI: 10.5334/jors.303](https://doi.org/10.5334/jors.303).
+
+> Wright, D.W., Richardson, R.A., Edeling, W., Lakhlili, J., Sinclair, R.C., Jancauskas, V., Suleimenova, D., Bosak, B., Kulczewski, M., Piontek, T., Kopta, P., Chirca, I., Arabnejad, H., Luk, O.O., Hoenen, O., Weglarz, J., Crommelin, D., Groen, D. and Coveney, P.V. (2020), Building Confidence in Simulation: Applications of EasyVVUQ. Adv. Theory Simul., 3: 1900246.
+> [DOI: 10.1002/adts.201900246](https://doi.org/10.1002/adts.201900246).

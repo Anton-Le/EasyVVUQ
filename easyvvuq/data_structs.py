@@ -7,7 +7,7 @@ import json
 from easyvvuq import constants
 from easyvvuq.encoders import BaseEncoder
 from easyvvuq.decoders import BaseDecoder
-from easyvvuq.collate import BaseCollationElement
+from easyvvuq.utils.helpers import easyvvuq_serialize
 import numpy
 
 __copyright__ = """
@@ -103,8 +103,6 @@ class RunInfo:
     ----------
     run_name : str
         Human readable name of the run.
-    ensemble_name: str
-        Human readable name of the ensemble this run belongs to.
     app : None or int
         ID of the associated application.
     params : None or dict
@@ -124,15 +122,12 @@ class RunInfo:
         ID of the associated application.
     run_name : str
         Human readable name of the run.
-    ensemble_name: str
-        Human readable name of the ensemble this run belongs to.
     status : enum(Status)
     """
 
     def __init__(
             self,
             run_name=None,
-            ensemble_name=None,
             run_dir=None,
             app=None,
             params=None,
@@ -140,24 +135,20 @@ class RunInfo:
             campaign=None,
             status=constants.Status.NEW):
 
-        check_reference(campaign, run_name, ref_type='campaign')
-        check_reference(sample, run_name, ref_type='sampler')
-        check_reference(app, run_name, ref_type='app')
-
         self.campaign = campaign
         self.sample = sample
         self.app = app
         self.run_name = run_name
-        self.ensemble_name = ensemble_name
         self.run_dir = run_dir
 
         if not params:
             message = f'No run configuration specified for run {run_name}'
-            logger.critical(message)
             raise RuntimeError(message)
 
         self.params = params
         self.status = status
+
+        self.iteration = 0
 
     def to_dict(self, flatten=False):
         """Convert to a dictionary (optionally flatten to single level)
@@ -184,26 +175,26 @@ class RunInfo:
 
             out_dict = {
                 'run_name': self.run_name,
-                'ensemble_name': self.ensemble_name,
                 'run_dir': self.run_dir,
                 'params': json.dumps(self.params, default=convert_nonserializable),
                 'status': constants.Status(self.status),
                 'campaign': self.campaign,
-                'sample': self.sample,
+                'sampler': self.sample,
                 'app': self.app,
+                'iteration': self.iteration,
             }
 
         else:
 
             out_dict = {
                 'run_name': self.run_name,
-                'ensemble_name': self.ensemble_name,
                 'run_dir': self.run_dir,
                 'params': self.params,
                 'status': constants.Status(self.status),
                 'campaign': self.campaign,
-                'sample': self.sample,
+                'sampler': self.sample,
                 'app': self.app,
+                'iteration': self.iteration,
             }
 
         return out_dict
@@ -212,46 +203,33 @@ class RunInfo:
 class AppInfo:
     """Handles information for particular application.
 
-    Parameters
-    ----------
-    name : str or None
-        Human readable application name.
-    paramsspec : ParamsSpecification or None
-        Description of possible parameter values.
-    encoder : :obj:`easyvvuq.encoders.base.BaseEncoder`
-        Encoder element for application.
-    decoder : :obj:`easyvvuq.decoders.base.BaseDecoder`
-        Decoder element for application.
-    collater : :obj:`easyvvuq.collation.base.BaseCollationElement`
-        Collater element for application.
-
     Attributes
     ----------
     name : str or None
         Human readable application name.
     paramsspec : ParamsSpecification or None
         Description of possible parameter values.
+    decoderspec : dict
+        Description of the output format of the decoder.
     input_encoder : :obj:`easyvvuq.encoders.base.BaseEncoder`
         Encoder element for application.
     output_decoder : :obj:`easyvvuq.decoders.base.BaseDecoder`
         Decoder element for application.
-    collater : :obj:`easyvvuq.collation.base.BaseCollationElement`
-        Collater element for application.
     """
 
     def __init__(
             self,
             name=None,
             paramsspec=None,
+            decoderspec=None,
             encoder=None,
-            decoder=None,
-            collater=None):
+            decoder=None):
 
         self.name = name
         self.input_encoder = encoder
         self.output_decoder = decoder
-        self.collater = collater
         self.paramsspec = paramsspec
+        self.decoderspec = decoderspec
 
     @property
     def input_encoder(self):
@@ -279,24 +257,6 @@ class AppInfo:
 
         self._output_decoder = decoder
 
-    @property
-    def collater(self):
-        return self._collater
-
-    @collater.setter
-    def collater(self, collater):
-        if collater is None:
-            msg = "A 'collater' must be provided for this App (cannot be None)."
-            logging.error(msg)
-            raise Exception(msg)
-
-        if not isinstance(collater, BaseCollationElement):
-            msg = "Provided 'collater' must be derived from type BaseCollationElement"
-            logging.error(msg)
-            raise Exception(msg)
-
-        self._collater = collater
-
     def to_dict(self, flatten=False):
         """Convert to a dictionary (optionally flatten to single level)
 
@@ -323,9 +283,9 @@ class AppInfo:
             out_dict = {
                 'name': self.name,
                 'params': self.paramsspec,
-                'input_encoder': self.input_encoder.serialize(),
-                'output_decoder': self.output_decoder.serialize(),
-                'collater': self.collater.serialize()
+                'decoderspec': self.decoderspec,
+                'input_encoder': easyvvuq_serialize(self.input_encoder),
+                'output_decoder': easyvvuq_serialize(self.output_decoder)
             }
 
         return out_dict

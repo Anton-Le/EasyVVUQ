@@ -4,20 +4,20 @@ import os
 import json
 import logging
 import pandas as pd
+import ast
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import MetaData
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import text
+from sqlalchemy.engine import Engine
+from sqlalchemy import event
 from .base import BaseCampaignDB
 from easyvvuq import constants
-from easyvvuq.sampling.base import BaseSamplingElement
-from easyvvuq.encoders.base import BaseEncoder
-from easyvvuq.decoders.base import BaseDecoder
-from easyvvuq.collate.base import BaseCollationElement
 from easyvvuq import ParamsSpecification
-from easyvvuq.utils.helpers import multi_index_tuple_parser
+from easyvvuq.utils.helpers import easyvvuq_serialize, easyvvuq_deserialize
+
 
 __copyright__ = """
 
@@ -41,6 +41,8 @@ __copyright__ = """
 """
 __license__ = "LGPL"
 
+COMMIT_RATE = 50000
+
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
@@ -52,7 +54,6 @@ class DBInfoTable(Base):
     __tablename__ = 'db_info'
     id = Column(Integer, primary_key=True)
     next_run = Column(Integer)
-    next_ensemble = Column(Integer)
 
 
 class CampaignTable(Base):
@@ -65,7 +66,7 @@ class CampaignTable(Base):
     campaign_dir_prefix = Column(String)
     campaign_dir = Column(String)
     runs_dir = Column(String)
-    sampler = Column(Integer, ForeignKey('sample.id'))
+    sampler = Column(Integer, ForeignKey('sampler.id'))
 
 
 class AppTable(Base):
@@ -78,6 +79,7 @@ class AppTable(Base):
     output_decoder = Column(String)
     collater = Column(String)
     params = Column(String)
+    decoderspec = Column(String)
 
 
 class RunTable(Base):
@@ -85,23 +87,30 @@ class RunTable(Base):
     """
     __tablename__ = 'run'
     id = Column(Integer, primary_key=True)
-    run_name = Column(String)
-    ensemble_name = Column(String)
+    run_name = Column(String, index=True)
     app = Column(Integer, ForeignKey('app.id'))
     params = Column(String)
     status = Column(Integer)
     run_dir = Column(String)
+    result = Column(String, default="{}")
     campaign = Column(Integer, ForeignKey('campaign_info.id'))
-    sample = Column(Integer, ForeignKey('sample.id'))
+    sampler = Column(Integer, ForeignKey('sampler.id'))
+    iteration = Column(Integer, default=0)
 
 
 class SamplerTable(Base):
     """An SQLAlchemy schema for the run table.
     """
-    __tablename__ = 'sample'
+    __tablename__ = 'sampler'
     id = Column(Integer, primary_key=True)
     sampler = Column(String)
 
+@event.listens_for(Engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA synchronous = OFF")
+    cursor.execute("PRAGMA journal_mode = OFF")
+    cursor.close()
 
 class CampaignDB(BaseCampaignDB):
 
@@ -138,13 +147,9 @@ class CampaignDB(BaseCampaignDB):
                                    ' version of EasyVVUQ!')
 
             self._next_run = 1
-            self._next_ensemble = 1
 
             self.session.add(CampaignTable(**info.to_dict(flatten=True)))
-            self.session.add(
-                DBInfoTable(
-                    next_run=self._next_run,
-                    next_ensemble=self._next_ensemble))
+            self.session.add(DBInfoTable(next_run=self._next_run))
             self.session.commit()
         else:
             info = self.session.query(
@@ -154,7 +159,6 @@ class CampaignDB(BaseCampaignDB):
 
             db_info = self.session.query(DBInfoTable).first()
             self._next_run = db_info.next_run
-            self._next_ensemble = db_info.next_ensemble
 
     def app(self, name=None):
         """
@@ -174,8 +178,6 @@ class CampaignDB(BaseCampaignDB):
         """
 
         if name is None:
-            logging.warning('No app name provided so using first app '
-                            'in database')
             selected = self.session.query(AppTable).all()
         else:
             selected = self.session.query(AppTable).filter_by(name=name).all()
@@ -191,13 +193,18 @@ class CampaignDB(BaseCampaignDB):
 
         selected_app = selected[0]
 
+        decoderspec = selected_app.decoderspec
+        if decoderspec is not None:
+            decoderspec = ast.literal_eval(selected_app.decoderspec)
+
         app_dict = {
             'id': selected_app.id,
             'name': selected_app.name,
             'input_encoder': selected_app.input_encoder,
             'output_decoder': selected_app.output_decoder,
             'collater': selected_app.collater,
-            'params': ParamsSpecification.deserialize(selected_app.params)
+            'params': ParamsSpecification.deserialize(selected_app.params),
+            'decoderspec': decoderspec
         }
 
         return app_dict
@@ -245,7 +252,7 @@ class CampaignDB(BaseCampaignDB):
         -------
 
         """
-        db_entry = SamplerTable(sampler=sampler_element.serialize())
+        db_entry = SamplerTable(sampler=easyvvuq_serialize(sampler_element))
 
         self.session.add(db_entry)
         self.session.commit()
@@ -270,7 +277,7 @@ class CampaignDB(BaseCampaignDB):
         """
 
         selected = self.session.query(SamplerTable).get(sampler_id)
-        selected.sampler = sampler_element.serialize()
+        selected.sampler = easyvvuq_serialize(sampler_element)
         self.session.commit()
 
     def resurrect_sampler(self, sampler_id):
@@ -291,7 +298,7 @@ class CampaignDB(BaseCampaignDB):
         """
 
         serialized_sampler = self.session.query(SamplerTable).get(sampler_id).sampler
-        sampler = BaseSamplingElement.deserialize(serialized_sampler)
+        sampler = easyvvuq_deserialize(serialized_sampler.encode('utf-8'))
         return sampler
 
     def resurrect_app(self, app_name):
@@ -314,12 +321,11 @@ class CampaignDB(BaseCampaignDB):
 
         app_info = self.app(app_name)
 
-        encoder = BaseEncoder.deserialize(app_info['input_encoder'])
-        decoder = BaseDecoder.deserialize(app_info['output_decoder'])
-        collater = BaseCollationElement.deserialize(app_info['collater'])
-        return encoder, decoder, collater
+        encoder = easyvvuq_deserialize(app_info['input_encoder'])
+        decoder = easyvvuq_deserialize(app_info['output_decoder'])
+        return encoder, decoder
 
-    def add_runs(self, run_info_list=None, run_prefix='Run_', ensemble_prefix='Ensemble_'):
+    def add_runs(self, run_info_list=None, run_prefix='Run_', iteration=0):
         """
         Add list of runs to the `runs` table in the database.
 
@@ -330,8 +336,6 @@ class CampaignDB(BaseCampaignDB):
             EasyVVUQ workflow is this RunTable), campaign (id number), sample, app
         run_prefix: str
             Prefix for run id
-        ensemble_prefix: str
-            Prefix for ensemble id
 
         Returns
         -------
@@ -340,20 +344,21 @@ class CampaignDB(BaseCampaignDB):
 
         # Add all runs to RunTable
         runs_dir = self.runs_dir()
+        commit_counter = 0
         for run_info in run_info_list:
-            run_info.ensemble_name = f"{ensemble_prefix}{self._next_ensemble}"
             run_info.run_name = f"{run_prefix}{self._next_run}"
             run_info.run_dir = os.path.join(runs_dir, run_info.run_name)
-
+            run_info.iteration = iteration
             run = RunTable(**run_info.to_dict(flatten=True))
             self.session.add(run)
             self._next_run += 1
-        self._next_ensemble += 1
+            commit_counter += 1
+            if commit_counter % COMMIT_RATE == 0:
+                self.session.commit()
 
         # Update run and ensemble counters in db
         db_info = self.session.query(DBInfoTable).first()
         db_info.next_run = self._next_run
-        db_info.next_ensemble = self._next_ensemble
 
         self.session.commit()
 
@@ -377,12 +382,12 @@ class CampaignDB(BaseCampaignDB):
 
         run_info = {
             'run_name': run_row.run_name,
-            'ensemble_name': run_row.ensemble_name,
             'params': json.loads(run_row.params),
             'status': constants.Status(run_row.status),
-            'sample': run_row.sample,
+            'sampler': run_row.sampler,
             'campaign': run_row.campaign,
             'app': run_row.app,
+            'result': run_row.result,
             'run_dir': run_row.run_dir
         }
 
@@ -461,7 +466,7 @@ class CampaignDB(BaseCampaignDB):
 
     def set_run_statuses(self, run_name_list, status):
         """
-        Set the specified 'status' (enum) for all runs in the list run_ID_list
+        Set the specified 'status' (enum) for all runs in the list run_name_list
 
         Parameters
         ----------
@@ -469,7 +474,6 @@ class CampaignDB(BaseCampaignDB):
             A list of run names run names (format is usually: prefix + int)
         status: enum(Status)
             The new status all listed runs should now have
-
         Returns
         -------
 
@@ -508,7 +512,7 @@ class CampaignDB(BaseCampaignDB):
             sqlalchemy query for campaign with this name
 
         """
-
+        assert(isinstance(campaign_name, str) or campaign_name is None)
         query = self.session.query(CampaignTable)
 
         if campaign_name is None:
@@ -812,64 +816,105 @@ class CampaignDB(BaseCampaignDB):
 
         return self._get_campaign_info(campaign_name=campaign_name).runs_dir
 
-    def append_collation_dataframe(self, df, app_id):
-        """
-        Append the data in dataframe 'df' to that already collated in the database
-        for the specified app.
+    def store_results(self, app_name, results):
+        """Stores the results from a given run in the database.
 
         Parameters
         ----------
-        df: pandas dataframe
-            The dataframe whose contents need to be appended to the collation store
-        app_id: int
-            The id of the app in the sql database. Used to determine which collation
-            table is appended to.
-
-        Returns
-        -------
+        run_name: str
+            name of the run
+        results: dict
+            dictionary with the results (from the decoder)
         """
+        try:
+            app_id = self.session.query(AppTable).filter(AppTable.name == app_name).all()[0].id
+        except IndexError:
+            raise RuntimeError("app with the name {} not found".format(app_name))
+        commit_counter = 0
+        for run_name, result in results:
+            try:
+                self.session.query(RunTable).\
+                    filter(RunTable.run_name == run_name, RunTable.app == app_id).\
+                    update({'result': json.dumps(result), 'status': constants.Status.COLLATED})
+                commit_counter += 1
+                if commit_counter % COMMIT_RATE == 0:
+                    self.session.commit()
+            except IndexError:
+                raise RuntimeError("no runs with name {} found".format(run_name))
+        self.session.commit()
 
-        if df.size == 0:
-            logging.warning(
-                f"Attempt to append empty dataframe to SQL collation table for app_id {app_id}.")
-            return
-
-        tablename = 'COLLATION_APP' + str(app_id)
-        df.to_sql(tablename, self.engine, if_exists='append')
-
-    def get_collation_dataframe(self, app_id):
-        """
-        Returns a dataframe containing the full collated results stored in this database
-        for the specified app.
-        i.e. the total of what was added with the append_collation_dataframe() method.
+    def get_results(self, app_name, sampler_id, status=constants.Status.COLLATED, iteration=-1):
+        """Returns the results as a pandas DataFrame.
 
         Parameters
         ----------
-        app_id: int
-            The id of the app in the sql database. Used to determine which collation
-            table is appended to.
+        app_name: str
+            Name of the app to return data for.
+        sampler_id: int
+            ID of the sampler.
 
         Returns
         -------
-        df: pandas dataframe
-            The dataframe with all contents that were appended to this database
+        pandas DataFrame constructed from the decoder output dictionaries
         """
+        try:
+            app_id = self.session.query(AppTable).filter(AppTable.name == app_name).all()[0].id
+        except IndexError:
+            raise RuntimeError("app with the name {} not found".format(app_name))
+        pd_result = {}
+        query = self.session.query(RunTable).\
+            filter(RunTable.app == app_id).\
+            filter(RunTable.sampler == sampler_id).\
+            filter(RunTable.status == status)
+        # if only a specific iteration is requested filter it out
+        if iteration >= 0:
+            query = query.filter(RunTable.iteration == iteration)
+        for row in query:
+            params = {'run_id': row.id}
+            params['iteration'] = row.iteration
+            params = {**params, **json.loads(row.params)}
+            result = json.loads(row.result)
+            pd_dict = {**params, **result}
+            for key in pd_dict.keys():
+                if not isinstance(pd_dict[key], list):
+                    try:
+                        pd_result[(key, 0)].append(pd_dict[key])
+                    except KeyError:
+                        pd_result[(key, 0)] = [pd_dict[key]]
+                else:
+                    for i, elt in enumerate(pd_dict[key]):
+                        try:
+                            pd_result[(key, i)].append(pd_dict[key][i])
+                        except KeyError:
+                            pd_result[(key, i)] = [pd_dict[key][i]]
+        return pd.DataFrame(pd_result)
 
-        tablename = 'COLLATION_APP' + str(app_id)
-        if tablename in self.engine.table_names():
-            query = "select * from " + tablename
-            df = pd.read_sql_query(query, self.engine.execution_options(sqlite_raw_colnames=True))
-            columns, multi = multi_index_tuple_parser(df.columns.values[1:])
-            if multi:
-                df = pd.DataFrame(df.values[:, 1:],
-                                  columns=pd.MultiIndex.from_tuples(columns))
-            return df
-        else:
-            return None
+    def relocate(self, new_path, campaign_name):
+        """Update all runs in the db with the new campaign path.
 
-    def clear_collation(self, app_id):
-        tablename = 'COLLATION_APP' + str(app_id)
-
-        if tablename in self.engine.table_names():
-            sqlcmd = text(f'DROP TABLE {tablename};')
-            self.engine.execute(sqlcmd)
+        Parameters
+        ----------
+        new_path: str
+            new runs directory
+        campaign_name: str
+            name of the campaign
+        """
+        campaign_id = self.get_campaign_id(campaign_name)
+        campaign_info = self.session.query(CampaignTable).\
+            filter(CampaignTable.id == campaign_id).first()
+        path, runs_dir = os.path.split(campaign_info.runs_dir)
+        self.session.query(CampaignTable).\
+            filter(CampaignTable.id == campaign_id).\
+            update({'campaign_dir': str(new_path),
+                    'runs_dir': str(os.path.join(new_path, runs_dir))})
+        for app_info in self.session.query(AppTable):
+            for run in self.runs(app_id=app_info.id):
+                path, run_dir = os.path.split(run[1]['run_dir'])
+                path, runs_dir = os.path.split(path)
+                new_path_ = os.path.join(new_path, runs_dir, run_dir)
+                self.session.query(RunTable).\
+                    filter(RunTable.campaign == campaign_id).\
+                    filter(RunTable.run_name == run[0]).\
+                    filter(RunTable.app == app_info.id).\
+                    update({'run_dir': new_path_})
+        self.session.commit()
